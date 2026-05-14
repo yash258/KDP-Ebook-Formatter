@@ -1,11 +1,12 @@
 import re
+import copy
 from flask import Flask, request, send_file
 from io import BytesIO
 from docx import Document
-from docx.shared import Inches, Pt, RGBColor, Emu
+from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.style import WD_STYLE_TYPE
-from docx.oxml.ns import qn
+from docx.oxml.ns import qn, nsmap
 from docx.oxml import OxmlElement
 
 app = Flask(__name__)
@@ -119,7 +120,10 @@ def set_kdp_page(doc, trim_size):
         section.bottom_margin = bottom
         section.left_margin   = inside
         section.right_margin  = outside
-        section.gutter        = Emu(0)
+        # gutter via XML — python-docx Section has no .gutter property
+        pgMar = section._sectPr.find(qn('w:pgMar'))
+        if pgMar is not None:
+            pgMar.set(qn('w:gutter'), '0')
     settings = doc.settings.element
     if settings.find(qn('w:mirrorMargins')) is None:
         settings.append(_xml_el('w:mirrorMargins'))
@@ -135,42 +139,62 @@ def add_page_numbers(doc):
         run.font.size = Pt(9)
         for ftype, txt in [('begin', None), (None, ' PAGE '), ('separate', None), ('end', None)]:
             if ftype:
-                el = _xml_el('w:fldChar'); _set_attr(el, 'w:fldCharType', ftype); run._r.append(el)
+                el = _xml_el('w:fldChar')
+                el.set(qn('w:fldCharType'), ftype)
+                run._r.append(el)
             else:
-                el = _xml_el('w:instrText'); _set_attr(el, 'xml:space', 'preserve'); el.text = txt; run._r.append(el)
+                el = _xml_el('w:instrText')
+                el.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+                el.text = txt
+                run._r.append(el)
 
 def add_drop_cap(para):
+    """Split first character into a proper Word drop cap frame."""
     text = para.text
-    if not text.strip(): return
+    if not text.strip() or len(text) < 2:
+        return
     first_char = text[0]
     rest_text  = text[1:]
+
+    # Clear all existing runs
     for run in para.runs:
         run.text = ''
+
+    # Set framePr on this paragraph for the drop cap letter
     pPr = para._p.get_or_add_pPr()
+    old_fp = pPr.find(qn('w:framePr'))
+    if old_fp is not None:
+        pPr.remove(old_fp)
     fp = _xml_el('w:framePr')
-    for k,v in [('w:dropCap','drop'),('w:lines','3'),('w:wrap','around'),
-                ('w:vAnchor','text'),('w:hAnchor','text')]:
-        _set_attr(fp, k, v)
+    fp.set(qn('w:dropCap'), 'drop')
+    fp.set(qn('w:lines'), '3')
+    fp.set(qn('w:wrap'), 'around')
+    fp.set(qn('w:vAnchor'), 'text')
+    fp.set(qn('w:hAnchor'), 'text')
     pPr.append(fp)
+
+    # Add the drop cap character
     dc_run = para.add_run(first_char)
     dc_run.font.size = Pt(48)
     dc_run.font.bold = True
-    rest_para = para._element.getparent()
-    import copy
-    new_p = copy.deepcopy(para._element)
-    rest_pPr = new_p.find(qn('w:pPr'))
-    if rest_pPr is not None:
-        old_fp = rest_pPr.find(qn('w:framePr'))
-        if old_fp is not None: rest_pPr.remove(old_fp)
-    for r_el in new_p.findall(qn('w:r')):
-        new_p.remove(r_el)
-    new_r = _xml_el('w:r')
-    new_t = _xml_el('w:t')
-    _set_attr(new_t, 'xml:space', 'preserve')
+
+    # Create a new paragraph for the rest of the text
+    new_p_el = OxmlElement('w:p')
+    # Copy paragraph properties but strip the framePr
+    orig_pPr = copy.deepcopy(pPr)
+    strip_fp = orig_pPr.find(qn('w:framePr'))
+    if strip_fp is not None:
+        orig_pPr.remove(strip_fp)
+    new_p_el.append(orig_pPr)
+    # Add the rest text as a run
+    new_r = OxmlElement('w:r')
+    new_t = OxmlElement('w:t')
+    new_t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
     new_t.text = rest_text
     new_r.append(new_t)
-    new_p.append(new_r)
-    para._element.addnext(new_p)
+    new_p_el.append(new_r)
+    # Insert after the drop cap paragraph
+    para._element.addnext(new_p_el)
 
 def style_tables(doc, font_name, font_size):
     for table in doc.tables:
@@ -390,9 +414,10 @@ def clean_xml(doc):
     for tag in ['w:commentRangeStart','w:commentRangeEnd','w:commentReference','w:del']:
         for el in doc.element.xpath(f'//{tag}'):
             el.getparent().remove(el)
+    # reversed(list(...)) required — lxml elements don't support reversed() directly
     for ins in doc.element.xpath('//w:ins'):
         parent = ins.getparent(); idx = parent.index(ins)
-        for child in reversed(ins): parent.insert(idx, child)
+        for child in reversed(list(ins)): parent.insert(idx, child)
         parent.remove(ins)
 
 def inject_toc(doc):
@@ -403,9 +428,14 @@ def inject_toc(doc):
     run   = toc_p.add_run()
     for ftype, txt in [('begin',None),(None,'TOC \\o "1-3" \\h \\z \\u'),('separate',None),('end',None)]:
         if ftype:
-            el = _xml_el('w:fldChar'); _set_attr(el,'w:fldCharType',ftype); run._r.append(el)
+            el = _xml_el('w:fldChar')
+            el.set(qn('w:fldCharType'), ftype)
+            run._r.append(el)
         else:
-            el = _xml_el('w:instrText'); _set_attr(el,'xml:space','preserve'); el.text = txt; run._r.append(el)
+            el = _xml_el('w:instrText')
+            el.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+            el.text = txt
+            run._r.append(el)
     settings = doc.settings.element
     if settings.find(qn('w:updateFields')) is None:
         uf = _xml_el('w:updateFields'); _set_attr(uf,'w:val','true'); settings.append(uf)
@@ -452,14 +482,15 @@ def format_document():
                                    r'about the author|table of contents)\b', re.IGNORECASE)
             for para, ptype in classified:
                 if ptype == PType.CHAPTER_H1:
-                    txt = para.text.strip()
+                    txt = para.text.strip()  # capture BEFORE clearing runs
                     if not skip_kw.match(txt) and not re.match(r'^chapter\s+\d+', txt, re.IGNORECASE):
                         chap_num += 1
+                        new_text = f'Chapter {chap_num}: {txt}'
                         for run in para.runs: run.text = ''
                         if para.runs:
-                            para.runs[0].text = f'Chapter {chap_num}: {txt}'
+                            para.runs[0].text = new_text
                         else:
-                            para.add_run(f'Chapter {chap_num}: {txt}')
+                            para.add_run(new_text)
 
         # Apply formatting — track first body para after each H1
         prev_was_h1 = False
