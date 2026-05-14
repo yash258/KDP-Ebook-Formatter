@@ -60,10 +60,14 @@ export default function App() {
   const [genre, setGenre]       = useState('N');
   const [font, setFont]         = useState('Georgia');
   const [spacing, setSpacing]   = useState('1.5');
+  const [trimSize, setTrimSize] = useState('5.5x8.5');
   const [centerH1, setCenterH1] = useState(true);
   const [centerH2, setCenterH2] = useState(false);
   const [borderH1, setBorderH1] = useState(true);
   const [borderH2, setBorderH2] = useState(false);
+  const [dropCaps, setDropCaps] = useState(false);
+  const [pageNums, setPageNums] = useState(true);
+  const [autoNum,  setAutoNum]  = useState(false);
 
   const [stage, setStage]           = useState(null);   // null = idle
   const [status, setStatus]         = useState('');
@@ -104,10 +108,14 @@ export default function App() {
     fd.append('genre',     genre);
     fd.append('font',      font);
     fd.append('spacing',   spacing);
+    fd.append('trim_size', trimSize);
     fd.append('center_h1', centerH1);
     fd.append('center_h2', centerH2);
     fd.append('border_h1', borderH1);
     fd.append('border_h2', borderH2);
+    fd.append('drop_caps', dropCaps);
+    fd.append('page_nums', pageNums);
+    fd.append('auto_num',  autoNum);
 
     try {
       const res = await fetch('/api/format', { method: 'POST', body: fd });
@@ -190,6 +198,22 @@ export default function App() {
             <Toggle label="Line Below Sub-Heading" sublabel="Subtle #CCCCCC rule" checked={borderH2} onChange={setBorderH2} />
           </div>
         </div>
+
+        <RadioGroup label="KDP Trim Size" value={trimSize} onChange={setTrimSize} options={[
+          { value: '5x8',     label: '5″ × 8″',       sub: 'Novels & self-help' },
+          { value: '5.5x8.5', label: '5.5″ × 8.5″',   sub: 'Non-fiction standard' },
+          { value: '6x9',     label: '6″ × 9″',       sub: 'Business & textbooks' },
+        ]} />
+
+        <div className="input-group">
+          <h3 className="section-title">Publishing Options</h3>
+          <div className="toggle-list">
+            <Toggle label="Page Numbers" sublabel="Centered in footer" checked={pageNums} onChange={setPageNums} />
+            <Toggle label="Drop Caps" sublabel="First letter of each chapter" checked={dropCaps} onChange={setDropCaps} />
+            <Toggle label="Auto-Number Chapters" sublabel="Adds Chapter 1, 2, 3…" checked={autoNum} onChange={setAutoNum} />
+          </div>
+        </div>
+
       </section>
 
       {/* ── WHAT THE ENGINE DETECTS ── */}
